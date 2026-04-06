@@ -69,13 +69,13 @@ static int recv_and_log(int sockfd, packet *pkt, FILE *logfp)
 /* ================================================================== */
 int main(int argc, char *argv[])
 {
-    char *server_ip  = NULL;
-    int   port       = 0;
-    char *log_path   = NULL;
-    char *file_path  = NULL;
+    char *server_ip  = "10.128.0.2";   /* default: server VM    */
+    int   port       = 5000;            /* default port          */
+    char *log_path   = "client.log";    /* default log file      */
+    char *file_path  = "testfile.txt";  /* default file to send  */
     int   opt;
 
-    /* ---- parse command-line arguments ---- */
+    /* ---- parse command-line arguments (defaults used if omitted) ---- */
     while ((opt = getopt(argc, argv, "s:p:l:f:")) != -1) {
         switch (opt) {
             case 's': server_ip = optarg;          break;
@@ -84,18 +84,14 @@ int main(int argc, char *argv[])
             case 'f': file_path = optarg;          break;
             default:
                 fprintf(stderr,
-                        "Usage: %s -s <IP> -p <PORT> -l <LOG> -f <FILE>\n",
+                        "Usage: %s [-s <IP>] [-p <PORT>] [-l <LOG>] [-f <FILE>]\n",
                         argv[0]);
                 return 1;
         }
     }
 
-    if (!server_ip || port <= 0 || !log_path || !file_path) {
-        fprintf(stderr,
-                "Usage: %s -s <IP> -p <PORT> -l <LOG> -f <FILE>\n",
-                argv[0]);
-        return 1;
-    }
+    printf("Using server=%s, port=%d, log=%s, file=%s\n",
+           server_ip, port, log_path, file_path);
 
     /* ---- open log file ---- */
     FILE *logfp = fopen(log_path, "w");

@@ -70,26 +70,23 @@ static int recv_and_log(int sockfd, packet *pkt, FILE *logfp,
 /* ================================================================== */
 int main(int argc, char *argv[])
 {
-    int   port     = 0;
-    char *log_path = NULL;
+    int   port     = 5000;           /* default port */
+    char *log_path = "server.log";   /* default log  */
     int   opt;
 
-    /* ---- parse command-line args ---- */
+    /* ---- parse command-line args (defaults used if omitted) ---- */
     while ((opt = getopt(argc, argv, "p:s:")) != -1) {
         switch (opt) {
             case 'p': port     = atoi(optarg);  break;
             case 's': log_path = optarg;        break;
             default:
-                fprintf(stderr, "Usage: %s -p <PORT> -s <LOGFILE>\n",
+                fprintf(stderr, "Usage: %s [-p <PORT>] [-s <LOGFILE>]\n",
                         argv[0]);
                 return 1;
         }
     }
 
-    if (port <= 0 || !log_path) {
-        fprintf(stderr, "Usage: %s -p <PORT> -s <LOGFILE>\n", argv[0]);
-        return 1;
-    }
+    printf("Using port=%d, log=%s\n", port, log_path);
 
     /* ---- open the log file ---- */
     FILE *logfp = fopen(log_path, "w");
