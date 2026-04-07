@@ -196,7 +196,75 @@ int main(int argc, char *argv[])
         printf("Handshake complete.\n");
 
         /* ========================================================== */
-        /*  TODO: Sprint 2 — Data Transfer goes here                  */
+        /*  SPRINT 2 — Data Transfer                                  */
+        /* ========================================================== */
+        
+        uint32_t expected_seq = client_isn + 1;
+        FILE *outfp = NULL;
+
+        /* Make sure timeout is set to our standard timeout for data wait.
+         * The client might be slow, but usually standard timeout is fine. 
+         * The assignment says: "Do not reset the timeout between packets; it is already set." */
+        while (1) {
+            if (recv_and_log(sockfd, &pkt, logfp, &client_addr) < 0) {
+                continue; /* timeout waiting for next pkt, keep looping */
+            }
+
+            if (pkt.flags & FLAG_FIN) {
+                /* FIN marks the start of Sprint 3 Teardown */
+                break;
+            }
+
+            if (pkt.seq_num != expected_seq) {
+                /* Out of order or duplicate packet */
+                packet dup_ack = make_packet(0, expected_seq, FLAG_ACK, NULL, 0);
+                send_and_log(sockfd, &client_addr, &dup_ack, logfp);
+                continue;
+            }
+
+            /* In order packet received */
+            if (pkt.payload_len > 0) {
+                if (!outfp) {
+                    /* First packet has "FILENAME:xxxx\0" */
+                    if (strncmp((char *)pkt.payload, "FILENAME:", 9) == 0) {
+                        char *name = (char *)pkt.payload + 9;
+                        int name_len = strlen(name);
+
+                        char out_name[256];
+                        snprintf(out_name, sizeof(out_name), "received_%s", name);
+                        outfp = fopen(out_name, "wb");
+                        if (!outfp) {
+                            perror("fopen received file");
+                            /* Don't break completely, just skip writing */
+                        } else {
+                            printf("Receiving file -> %s\n", out_name);
+                            
+                            int prefix_len = 9 + name_len + 1; /* includes \0 */
+                            if (pkt.payload_len > (uint32_t)prefix_len) {
+                                fwrite(pkt.payload + prefix_len, 1, pkt.payload_len - prefix_len, outfp);
+                                fflush(outfp);
+                            }
+                        }
+                    }
+                } else {
+                    /* Subsequent data packets */
+                    fwrite(pkt.payload, 1, pkt.payload_len, outfp);
+                    fflush(outfp);
+                }
+            }
+
+            expected_seq += pkt.payload_len;
+
+            /* Answer with standard ACK */
+            packet expected_ack = make_packet(0, expected_seq, FLAG_ACK, NULL, 0);
+            send_and_log(sockfd, &client_addr, &expected_ack, logfp);
+        }
+
+        if (outfp) {
+            fclose(outfp);
+        }
+
+        /* ========================================================== */
         /*  TODO: Sprint 3 — Teardown goes here                       */
         /* ========================================================== */
 

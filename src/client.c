@@ -179,7 +179,85 @@ int main(int argc, char *argv[])
     printf("Handshake complete.\n");
 
     /* ============================================================== */
-    /*  TODO: Sprint 2 — Data Transfer goes here                      */
+    /*  SPRINT 2 — Data Transfer                                      */
+    /* ============================================================== */
+
+    FILE *infp = fopen(file_path, "rb");
+    if (!infp) {
+        perror("fopen file");
+        close(sockfd);
+        fclose(logfp);
+        return 1;
+    }
+
+    uint32_t current_seq = client_isn + 1;
+    int is_first_packet = 1;
+    
+    char file_copy[256];
+    strncpy(file_copy, file_path, sizeof(file_copy) - 1);
+    file_copy[sizeof(file_copy) - 1] = '\0';
+    char *base_name = basename(file_copy);
+
+    printf("Starting file transfer of %s ...\n", base_name);
+
+    while (1) {
+        uint8_t payload_buf[MAX_PAYLOAD];
+        uint32_t payload_len = 0;
+
+        if (is_first_packet) {
+            int prefix_len = snprintf((char *)payload_buf, MAX_PAYLOAD, "FILENAME:%s", base_name) + 1;
+            payload_len += prefix_len;
+
+            size_t bytes_read = fread(payload_buf + prefix_len, 1, MAX_PAYLOAD - prefix_len, infp);
+            payload_len += bytes_read;
+            is_first_packet = 0;
+        } else {
+            size_t bytes_read = fread(payload_buf, 1, MAX_PAYLOAD, infp);
+            payload_len = bytes_read;
+        }
+
+        if (payload_len == 0) {
+            break;
+        }
+
+        packet pkt = make_packet(current_seq, 0, 0, payload_buf, payload_len);
+        int acked = 0;
+
+        for (int attempt = 0; attempt < MAX_RETRIES; attempt++) {
+            send_and_log(sockfd, &server_addr, &pkt, logfp);
+
+            packet reply;
+            if (recv_and_log(sockfd, &reply, logfp) < 0) {
+                printf("  Timeout waiting for ACK, retransmitting (%d/%d)\n", attempt + 1, MAX_RETRIES);
+                continue;
+            }
+
+            if ((reply.flags & FLAG_ACK) && reply.ack_num == current_seq + payload_len) {
+                current_seq += payload_len;
+                acked = 1;
+                break;
+            } else {
+                /* Could be a duplicate or old packet, ignore and continue waiting for our expected ACK. */
+                /* Wait, recv_and_log already consumes the packet. 
+                 * If we get a wrong ACK, maybe we shouldn't consider it a timeout but rather just a wrong packet.
+                 * However, we only have one recv timeout window. If it's the wrong ACK, we'll retransmit on the loop.
+                 */
+            }
+        }
+
+        if (!acked) {
+            fprintf(stderr, "Transfer failed after %d retries.\n", MAX_RETRIES);
+            fclose(infp);
+            close(sockfd);
+            fclose(logfp);
+            return 1;
+        }
+    }
+
+    printf("File transfer complete. Sent %u bytes of reliable data.\n", current_seq - (client_isn + 1));
+    fclose(infp);
+
+    /* ============================================================== */
     /*  TODO: Sprint 3 — Teardown goes here                           */
     /* ============================================================== */
 
