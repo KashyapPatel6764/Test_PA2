@@ -2,12 +2,7 @@
  * client.c
  * CSC4200 — Program 2: TCP-Like Reliable Protocol over UDP
  *
- * Sprint 1: Three-Way Handshake
- *
  * Usage:  ./client -s <SERVER-IP> -p <PORT> -l <LOGFILE> -f <FILE>
- *
- * Right now this only performs the handshake. Data transfer and
- * teardown will be added in Sprint 2 and Sprint 3.
  */
 
 #include "protocol.h"
@@ -22,9 +17,10 @@
 #include <sys/socket.h>
 #include <libgen.h>
 
-/* ------------------------------------------------------------------ */
-/* send_and_log – serialize a packet, send it via UDP, and log it.    */
-/* ------------------------------------------------------------------ */
+// SPRINT 1 EXPLANATION — Sending and UDP:
+//
+//   Unlike TCP where you use send(), for UDP we use sendto() because UDP is
+//   connectionless. Every packet must explicitly specify the destination address.
 static int send_and_log(int sockfd, struct sockaddr_in *dest,
                         packet *pkt, FILE *logfp)
 {
@@ -40,9 +36,11 @@ static int send_and_log(int sockfd, struct sockaddr_in *dest,
     return sent;
 }
 
-/* ------------------------------------------------------------------ */
-/* recv_and_log – receive a UDP datagram, deserialize it, and log it. */
-/* ------------------------------------------------------------------ */
+// SPRINT 1 EXPLANATION — Receiving over UDP:
+//
+//   Similarly, we use recvfrom() to receive UDP datagrams, which fills
+//   in the source address of whoever sent it. If a packet is malformed,
+//   we ignore it, unlike TCP which provides an ordered byte stream.
 static int recv_and_log(int sockfd, packet *pkt, FILE *logfp)
 {
     uint8_t            buf[MAX_PACKET];
@@ -64,9 +62,6 @@ static int recv_and_log(int sockfd, packet *pkt, FILE *logfp)
     return n;
 }
 
-/* ================================================================== */
-/* main                                                               */
-/* ================================================================== */
 int main(int argc, char *argv[])
 {
     char *server_ip  = "10.128.0.2";   /* default: server VM    */
@@ -75,7 +70,6 @@ int main(int argc, char *argv[])
     char *file_path  = "testfile.txt";  /* default file to send  */
     int   opt;
 
-    /* ---- parse command-line arguments (defaults used if omitted) ---- */
     while ((opt = getopt(argc, argv, "s:p:l:f:")) != -1) {
         switch (opt) {
             case 's': server_ip = optarg;          break;
@@ -93,14 +87,17 @@ int main(int argc, char *argv[])
     printf("Using server=%s, port=%d, log=%s, file=%s\n",
            server_ip, port, log_path, file_path);
 
-    /* ---- open log file ---- */
     FILE *logfp = fopen(log_path, "w");
     if (!logfp) {
         perror("fopen log");
         return 1;
     }
 
-    /* ---- create UDP socket ---- */
+    // SPRINT 1 EXPLANATION — socket() for UDP:
+    //
+    //   SOCK_DGRAM creates a User Datagram Protocol (UDP) socket.
+    //   Unlike TCP's SOCK_STREAM, UDP gives us no reliability, ordering,
+    //   or duplicate detection. We must implement those features manually.
     int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
     if (sockfd < 0) {
         perror("socket");
@@ -108,39 +105,46 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    /* set a receive timeout so recvfrom() doesn't block forever */
+    // SPRINT 2 EXPLANATION — RCVTIMEO timeout:
+    //
+    //   To implement packet retransmissions, we set SO_RCVTIMEO on the socket. This ensures
+    //   that if an ACK doesn't arrive in time, recvfrom() will unblock with a timeout
+    //   error, allowing our loop to trigger a retransmission.
     struct timeval tv;
     tv.tv_sec  = TIMEOUT_SEC;
     tv.tv_usec = TIMEOUT_USEC;
     setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
-    /* ---- fill in the server address struct ---- */
     struct sockaddr_in server_addr;
     memset(&server_addr, 0, sizeof(server_addr));
     server_addr.sin_family      = AF_INET;
     server_addr.sin_port        = htons(port);
     inet_pton(AF_INET, server_ip, &server_addr.sin_addr);
 
-    /* ============================================================== */
-    /*  SPRINT 1 — Three-Way Handshake                                */
-    /* ============================================================== */
 
-    /* pick a random initial sequence number */
+    
+    // SPRINT 1 EXPLANATION — ISN generation:
+    //
+    //   We use srand() to generate a random Initial Sequence Number (ISN).
+    //   This prevents spoofing and "ghost packets" from a previous connection
+    //   teardown from colliding with a new active connection.
     srand((unsigned)time(NULL) ^ getpid());
     uint32_t client_isn = (uint32_t)rand();
 
     printf("Starting handshake with %s:%d ...\n", server_ip, port);
 
-    /* Step 1: send SYN */
     packet syn = make_packet(client_isn, 0, FLAG_SYN, NULL, 0);
 
     uint32_t server_isn = 0;
     int      connected  = 0;
 
+    // SPRINT 1 EXPLANATION — Reliability Retransmission Loop:
+    //
+    //   Because UDP is unreliable, the SYN or the server's SYN-ACK could be dropped.
+    //   Looping up to MAX_RETRIES enforces successful connection progression in userspace.
     for (int attempt = 0; attempt < MAX_RETRIES; attempt++) {
         send_and_log(sockfd, &server_addr, &syn, logfp);
 
-        /* Step 2: wait for SYN|ACK */
         packet reply;
         if (recv_and_log(sockfd, &reply, logfp) < 0) {
             printf("  Timeout waiting for SYN|ACK, retrying (%d/%d)\n",
@@ -148,13 +152,10 @@ int main(int argc, char *argv[])
             continue;
         }
 
-        /* validate the SYN|ACK */
         if ((reply.flags & (FLAG_SYN | FLAG_ACK)) != (FLAG_SYN | FLAG_ACK)) {
-            printf("  Unexpected flags, retrying\n");
             continue;
         }
         if (reply.ack_num != client_isn + 1) {
-            printf("  Bad ack_num in SYN|ACK, retrying\n");
             continue;
         }
 
@@ -164,23 +165,18 @@ int main(int argc, char *argv[])
     }
 
     if (!connected) {
-        fprintf(stderr, "Handshake failed after %d retries.\n",
-                MAX_RETRIES);
+        fprintf(stderr, "Handshake failed after %d retries.\n", MAX_RETRIES);
         close(sockfd);
         fclose(logfp);
         return 1;
     }
 
-    /* Step 3: send ACK */
-    packet ack = make_packet(client_isn + 1, server_isn + 1,
-                             FLAG_ACK, NULL, 0);
+    packet ack = make_packet(client_isn + 1, server_isn + 1, FLAG_ACK, NULL, 0);
     send_and_log(sockfd, &server_addr, &ack, logfp);
 
     printf("Handshake complete.\n");
 
-    /* ============================================================== */
-    /*  SPRINT 2 — Data Transfer                                      */
-    /* ============================================================== */
+
 
     FILE *infp = fopen(file_path, "rb");
     if (!infp) {
@@ -204,6 +200,9 @@ int main(int argc, char *argv[])
         uint8_t payload_buf[MAX_PAYLOAD];
         uint32_t payload_len = 0;
 
+        // SPRINT 2 EXPLANATION — First packet FILENAME embed:
+        //
+        //   The first payload over the line acts as a header mapping its original baseline string name.
         if (is_first_packet) {
             int prefix_len = snprintf((char *)payload_buf, MAX_PAYLOAD, "FILENAME:%s", base_name) + 1;
             payload_len += prefix_len;
@@ -223,6 +222,10 @@ int main(int argc, char *argv[])
         packet pkt = make_packet(current_seq, 0, 0, payload_buf, payload_len);
         int acked = 0;
 
+        // SPRINT 2 EXPLANATION — Stop-and-Wait Data Transmission:
+        //
+        //   For reliable delivery, we wait for an explicit ACK containing the exact SEQ offset mapped 
+        //   dynamically before generating and transmitting the next block.
         for (int attempt = 0; attempt < MAX_RETRIES; attempt++) {
             send_and_log(sockfd, &server_addr, &pkt, logfp);
 
@@ -236,12 +239,6 @@ int main(int argc, char *argv[])
                 current_seq += payload_len;
                 acked = 1;
                 break;
-            } else {
-                /* Could be a duplicate or old packet, ignore and continue waiting for our expected ACK. */
-                /* Wait, recv_and_log already consumes the packet. 
-                 * If we get a wrong ACK, maybe we shouldn't consider it a timeout but rather just a wrong packet.
-                 * However, we only have one recv timeout window. If it's the wrong ACK, we'll retransmit on the loop.
-                 */
             }
         }
 
@@ -257,10 +254,12 @@ int main(int argc, char *argv[])
     printf("File transfer complete. Sent %u bytes of reliable data.\n", current_seq - (client_isn + 1));
     fclose(infp);
 
-    /* ============================================================== */
-    /*  Sprint 3 — Teardown                                           */
-    /* ============================================================== */
 
+
+    // SPRINT 3 EXPLANATION — FIN teardown logic:
+    //
+    //   At the end of reliable transfer, one side must broadcast a FIN flag packet.
+    //   We repeat the standard retransmission loop waiting specifically for both FIN|ACK flags on the response payload.
     printf("Starting connection teardown...\n");
     packet fin_pkt = make_packet(current_seq, 0, FLAG_FIN, NULL, 0);
     int fin_acked = 0;
