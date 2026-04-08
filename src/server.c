@@ -265,8 +265,17 @@ int main(int argc, char *argv[])
         }
 
         /* ========================================================== */
-        /*  TODO: Sprint 3 — Teardown goes here                       */
+        /*  Sprint 3 — Teardown                                       */
         /* ========================================================== */
+
+        printf("Interaction with %s completed.\n", inet_ntoa(client_addr.sin_addr));
+
+        packet fin_ack = make_packet(0, pkt.seq_num + 1, FLAG_FIN | FLAG_ACK, NULL, 0);
+        send_and_log(sockfd, &client_addr, &fin_ack, logfp);
+
+        /* Remove the socket timeout so we wait indefinitely for the next client */
+        struct timeval no_timeout_again = {0, 0};
+        setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &no_timeout_again, sizeof(no_timeout_again));
 
         printf("Waiting for next client...\n");
     }

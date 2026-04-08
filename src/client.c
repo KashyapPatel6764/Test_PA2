@@ -258,8 +258,35 @@ int main(int argc, char *argv[])
     fclose(infp);
 
     /* ============================================================== */
-    /*  TODO: Sprint 3 — Teardown goes here                           */
+    /*  Sprint 3 — Teardown                                           */
     /* ============================================================== */
+
+    printf("Starting connection teardown...\n");
+    packet fin_pkt = make_packet(current_seq, 0, FLAG_FIN, NULL, 0);
+    int fin_acked = 0;
+
+    for (int attempt = 0; attempt < MAX_RETRIES; attempt++) {
+        send_and_log(sockfd, &server_addr, &fin_pkt, logfp);
+
+        packet reply;
+        if (recv_and_log(sockfd, &reply, logfp) < 0) {
+            printf("  Timeout waiting for FIN|ACK, retransmitting FIN (%d/%d)\n", attempt + 1, MAX_RETRIES);
+            continue;
+        }
+
+        if ((reply.flags & (FLAG_FIN | FLAG_ACK)) == (FLAG_FIN | FLAG_ACK)) {
+            if (reply.ack_num == current_seq + 1) {
+                fin_acked = 1;
+                break;
+            }
+        }
+    }
+
+    if (!fin_acked) {
+        fprintf(stderr, "Teardown failed after %d retries.\n", MAX_RETRIES);
+    } else {
+        printf("Connection closed cleanly.\n");
+    }
 
     close(sockfd);
     fclose(logfp);
